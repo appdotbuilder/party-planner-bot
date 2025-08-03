@@ -42,21 +42,21 @@ describe('processBotResponse', () => {
   });
 
   it('should respond appropriately to party type state', async () => {
-    testConversation.current_state = 'party_type';
+    testConversation.current_state = 'initial';
 
     const result = await processBotResponse(testConversation, 'bachelor party');
 
     expect(result.content).toContain('bachelor party');
-    expect(result.content).toContain('which city');
+    expect(result.content).toContain('city');
   });
 
   it('should handle bachelorette party response', async () => {
-    testConversation.current_state = 'party_type';
+    testConversation.current_state = 'initial';
 
     const result = await processBotResponse(testConversation, 'bachelorette');
 
     expect(result.content).toContain('bachelorette party');
-    expect(result.content).toContain('which city');
+    expect(result.content).toContain('city');
   });
 
   it('should ask for clarification on unclear party type', async () => {
@@ -69,12 +69,13 @@ describe('processBotResponse', () => {
 
   it('should respond contextually to city selection', async () => {
     testConversation.current_state = 'city';
+    testConversation.party_type = 'bachelorette';
 
     const result = await processBotResponse(testConversation, 'Las Vegas');
 
     expect(result.content).toContain('Las Vegas');
-    expect(result.content).toContain('amazing place');
-    expect(result.content).toContain('Activities, a complete package, or nightlife');
+    expect(result.content).toContain('fantastic choice');
+    expect(result.content).toContain('experience');
   });
 
   it('should handle activity preference responses', async () => {
@@ -124,17 +125,17 @@ describe('processBotResponse', () => {
 
     const result = await processBotResponse(testConversation, 'John Smith');
 
-    expect(result.content).toContain('preferences');
+    expect(result.content).toContain('John Smith');
     expect(result.content).toContain('dates');
   });
 
   it('should handle preferences state', async () => {
     testConversation.current_state = 'preferences';
 
-    const result = await processBotResponse(testConversation, 'March 15-17');
+    const result = await processBotResponse(testConversation, 'tropical theme');
 
-    expect(result.content).toContain('amazing');
-    expect(result.content).toContain('themes');
+    expect(result.content).toContain('dining preferences');
+    expect(result.content).toContain('Perfect');
   });
 
   it('should handle generating itinerary state', async () => {
@@ -142,8 +143,8 @@ describe('processBotResponse', () => {
 
     const result = await processBotResponse(testConversation, 'Sounds great!');
 
-    expect(result.content).toContain('working on creating');
-    expect(result.content).toContain('perfect');
+    expect(result.content).toContain('almost ready');
+    expect(result.content).toContain('amazing experiences');
   });
 
   it('should handle completed state', async () => {
@@ -152,7 +153,7 @@ describe('processBotResponse', () => {
     const result = await processBotResponse(testConversation, 'Thank you!');
 
     expect(result.content).toContain('itinerary is ready');
-    expect(result.content).toContain('amazing celebration');
+    expect(result.content).toContain('incredible');
   });
 
   it('should provide default response for unknown states', async () => {

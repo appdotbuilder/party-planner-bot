@@ -13,6 +13,103 @@ interface MessageWithOptimistic extends Message {
   isOptimistic?: boolean;
 }
 
+interface TypewriterMessageProps {
+  message: Message;
+}
+
+function TypewriterMessage({ message }: TypewriterMessageProps) {
+  const [displayText, setDisplayText] = useState('');
+  const [isComplete, setIsComplete] = useState(false);
+
+  useEffect(() => {
+    if (message.message_type !== 'bot') {
+      setDisplayText(message.content);
+      setIsComplete(true);
+      return;
+    }
+
+    setDisplayText('');
+    setIsComplete(false);
+    
+    let index = 0;
+    const speed = 30; // milliseconds per character
+    
+    const typewriterInterval = setInterval(() => {
+      if (index < message.content.length) {
+        setDisplayText(message.content.slice(0, index + 1));
+        index++;
+      } else {
+        setIsComplete(true);
+        clearInterval(typewriterInterval);
+      }
+    }, speed);
+
+    return () => clearInterval(typewriterInterval);
+  }, [message.content, message.message_type]);
+
+  return (
+    <div className={`flex ${message.message_type === 'user' ? 'justify-end' : 'justify-start'}`}>
+      <div className={`flex items-start space-x-3 max-w-[85%] sm:max-w-[75%] md:max-w-[60%] ${
+        message.message_type === 'user' ? 'flex-row-reverse space-x-reverse' : ''
+      }`}>
+        <Avatar className="w-8 h-8 sm:w-9 sm:h-9 flex-shrink-0">
+          <AvatarFallback className={
+            message.message_type === 'user'
+              ? 'bg-gray-200 text-gray-700 text-sm font-medium'
+              : 'bg-blue-900 text-white text-sm font-bold'
+          }>
+            {message.message_type === 'user' ? 'U' : 'PP'}
+          </AvatarFallback>
+        </Avatar>
+        <div className="space-y-2">
+          <Card className={`p-3 sm:p-4 transition-all duration-200 hover:shadow-md ${
+            message.message_type === 'user'
+              ? 'bg-black text-white border-black shadow-sm'
+              : 'bg-gray-50 text-black border-gray-200 shadow-sm'
+          }`}>
+            <p className="text-sm sm:text-base leading-relaxed break-words">
+              {displayText}
+              {message.message_type === 'bot' && !isComplete && (
+                <span className="inline-block w-0.5 h-5 bg-blue-900 ml-1 animate-pulse" />
+              )}
+            </p>
+            {/* Rich media content */}
+            {message.metadata && (() => {
+              try {
+                const metadata = JSON.parse(message.metadata);
+                if (metadata.media_urls && metadata.media_urls.length > 0) {
+                  return (
+                    <div className="mt-3 space-y-2">
+                      {metadata.media_urls.slice(0, 2).map((url: string, index: number) => (
+                        <img 
+                          key={index}
+                          src={url} 
+                          alt={`Itinerary preview ${index + 1}`}
+                          className="w-full h-32 sm:h-40 object-cover rounded-md"
+                          loading="lazy"
+                        />
+                      ))}
+                    </div>
+                  );
+                }
+                return null;
+              } catch {
+                return null;
+              }
+            })()}
+            <p className="text-xs opacity-70 mt-2 sm:mt-3">
+              {message.created_at.toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit'
+              })}
+            </p>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<MessageWithOptimistic[]>([]);
@@ -112,11 +209,59 @@ function App() {
   };
 
   const handleQuickResponse = async (response: string) => {
-    setInputValue(response);
-    // Trigger form submission
-    const form = document.querySelector('form');
-    if (form) {
-      form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    if (!conversation || isLoading) return;
+
+    setIsLoading(true);
+
+    // Add optimistic user message immediately
+    const optimisticUserMessage: MessageWithOptimistic = {
+      id: Date.now(),
+      conversation_id: conversation.id,
+      message_type: 'user',
+      content: response,
+      metadata: null,
+      created_at: new Date(),
+      isOptimistic: true
+    };
+
+    setMessages((prev: MessageWithOptimistic[]) => [...prev, optimisticUserMessage]);
+
+    try {
+      // Send user message
+      const userMessage = await trpc.sendMessage.mutate({
+        conversation_id: conversation.id,
+        content: response,
+        message_type: 'user'
+      });
+
+      // Process bot response
+      const botResponse = await trpc.processBotResponse.mutate({
+        conversationId: conversation.id,
+        userMessage: response
+      });
+
+      // Update messages with actual responses, removing optimistic
+      setMessages((prev: MessageWithOptimistic[]) => [
+        ...prev.filter(msg => !msg.isOptimistic),
+        userMessage,
+        botResponse
+      ]);
+
+      // Update conversation state
+      const updatedConversation = await trpc.getConversation.query({
+        conversationId: conversation.id
+      });
+      if (updatedConversation) {
+        setConversation(updatedConversation);
+      }
+    } catch (error) {
+      console.error('Failed to send quick response:', error);
+      // Remove optimistic message on error
+      setMessages((prev: MessageWithOptimistic[]) => 
+        prev.filter(msg => !msg.isOptimistic)
+      );
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -126,11 +271,31 @@ function App() {
     switch (conversation.current_state) {
       case 'initial':
         return ['Bachelor Party 🎩', 'Bachelorette Party 💃'];
-      case 'party_type':
-        return ['Las Vegas', 'Miami', 'Nashville', 'New York', 'Austin'];
       case 'city':
-        return ['Activities & Adventures', 'Complete Package', 'Nightlife Focus'];
+        return ['Bangkok', 'Pattaya', 'Phuket', 'Other City'];
       case 'activity_preference':
+        return ['Activities & Adventures 🎯', 'Complete Package 📦', 'Nightlife Focus 🌙'];
+      case 'party_details':
+        if (!conversation.party_dates) {
+          return ['This Weekend', 'Next Month', 'In 2 Months'];
+        }
+        if (!conversation.guest_count) {
+          return ['4-6 People', '7-10 People', '10+ People'];
+        }
+        if (!conversation.budget) {
+          return ['$200-500 per person', '$500-1000 per person', 'Flexible Budget'];
+        }
+        return [];
+      case 'preferences':
+        if (!conversation.theme) {
+          return ['Classic & Elegant', 'Fun & Playful', 'Adventure Theme', 'Surprise Me!'];
+        }
+        if (!conversation.dining_preferences) {
+          return ['Fine Dining', 'Casual Spots', 'Local Cuisine', 'Mix of Everything'];
+        }
+        if (!conversation.music_preferences) {
+          return ['Live Music', 'DJ & Dancing', 'Karaoke Fun', 'Whatever\'s Popular'];
+        }
         return [];
       default:
         return [];
@@ -166,166 +331,138 @@ function App() {
   const quickResponses = getQuickResponses();
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 p-4 sticky top-0 z-10">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-blue-900 rounded-full flex items-center justify-center">
-              <span className="text-white text-sm font-bold">PP</span>
+    <div className="min-h-screen bg-white flex flex-col touch-manipulation">
+      {/* Header with safe area support */}
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-10 safe-area-top">
+        <div className="p-4 sm:p-5 lg:p-6 max-w-4xl mx-auto">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 bg-blue-900 rounded-full flex items-center justify-center shadow-sm">
+                <span className="text-white text-base sm:text-lg font-bold">PP</span>
+              </div>
+              <div>
+                <h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-black">Party Planner</h1>
+                <p className="text-xs sm:text-sm text-gray-500">Your AI assistant</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-lg font-bold text-black">Party Planner</h1>
-              <p className="text-xs text-gray-500">Your AI assistant</p>
-            </div>
+            {conversation?.party_type && (
+              <Badge variant="outline" className="border-blue-900 text-blue-900 px-3 py-1 text-sm font-medium">
+                {conversation.party_type === 'bachelor' ? '🎩 Bachelor' : '💃 Bachelorette'}
+              </Badge>
+            )}
           </div>
-          {conversation?.party_type && (
-            <Badge variant="outline" className="border-blue-900 text-blue-900">
-              {conversation.party_type === 'bachelor' ? '🎩 Bachelor' : '💃 Bachelorette'}
-            </Badge>
-          )}
-        </div>
 
-        {/* Progress Bar */}
-        {conversation && currentIndex >= 0 && (
-          <div className="mt-4">
-            <div className="flex justify-between mb-2">
-              {steps.map((step, index) => (
-                <div
-                  key={step.key}
-                  className={`flex flex-col items-center ${
-                    index <= currentIndex ? 'text-blue-900' : 'text-gray-300'
-                  }`}
-                >
+          {/* Enhanced Progress Bar */}
+          {conversation && currentIndex >= 0 && (
+            <div className="mt-4 sm:mt-6">
+              <div className="flex justify-between mb-3">
+                {steps.map((step, index) => (
                   <div
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
-                      index <= currentIndex
-                        ? 'bg-blue-900 text-white'
-                        : 'bg-gray-200 text-gray-400'
+                    key={step.key}
+                    className={`flex flex-col items-center transition-all duration-300 ${
+                      index <= currentIndex ? 'text-blue-900 scale-105' : 'text-gray-300'
                     }`}
                   >
-                    {index < currentIndex ? '✓' : step.icon}
+                    <div
+                      className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-xs sm:text-sm font-medium transition-all duration-300 ${
+                        index <= currentIndex
+                          ? 'bg-blue-900 text-white shadow-md'
+                          : 'bg-gray-200 text-gray-400'
+                      }`}
+                    >
+                      {index < currentIndex ? '✓' : step.icon}
+                    </div>
+                    <span className="text-xs sm:text-sm mt-1 sm:mt-2 font-medium text-center leading-tight max-w-[60px] sm:max-w-none">
+                      {step.label}
+                    </span>
                   </div>
-                  <span className="text-xs mt-1 hidden sm:block">{step.label}</span>
-                </div>
-              ))}
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-1">
-              <div
-                className="bg-blue-900 h-1 rounded-full transition-all duration-300"
-                style={{ width: `${((currentIndex + 1) / steps.length) * 100}%` }}
-              ></div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Messages */}
-      <ScrollArea className="flex-1 p-4">
-        <div className="space-y-4 pb-4">
-          {messages.map((message: MessageWithOptimistic) => (
-            <div
-              key={message.id}
-              className={`flex ${
-                message.message_type === 'user' ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              <div
-                className={`flex items-start space-x-2 max-w-[85%] ${
-                  message.message_type === 'user' ? 'flex-row-reverse space-x-reverse' : ''
-                }`}
-              >
-                <Avatar className="w-8 h-8 flex-shrink-0">
-                  <AvatarFallback
-                    className={
-                      message.message_type === 'user'
-                        ? 'bg-gray-200 text-gray-700'
-                        : 'bg-blue-900 text-white'
-                    }
-                  >
-                    {message.message_type === 'user' ? 'U' : 'PP'}
-                  </AvatarFallback>
-                </Avatar>
-                <Card
-                  className={`p-3 ${
-                    message.message_type === 'user'
-                      ? 'bg-black text-white border-black'
-                      : 'bg-gray-50 text-black border-gray-200'
-                  } ${message.isOptimistic ? 'opacity-60' : ''}`}
-                >
-                  <p className="text-sm leading-relaxed">{message.content}</p>
-                  <p className="text-xs opacity-70 mt-2">
-                    {message.created_at.toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </p>
-                </Card>
+                ))}
               </div>
-            </div>
-          ))}
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="flex items-start space-x-2">
-                <Avatar className="w-8 h-8">
-                  <AvatarFallback className="bg-blue-900 text-white">PP</AvatarFallback>
-                </Avatar>
-                <Card className="p-3 bg-gray-50 border-gray-200">
-                  <div className="flex space-x-1">
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                  </div>
-                </Card>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div
+                  className="bg-blue-900 h-2 rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${((currentIndex + 1) / steps.length) * 100}%` }}
+                ></div>
               </div>
             </div>
           )}
-          <div ref={messagesEndRef} />
+        </div>
+      </div>
+
+      {/* Messages Area with responsive container */}
+      <ScrollArea className="flex-1 hide-scrollbar">
+        <div className="max-w-4xl mx-auto p-4 sm:p-5 lg:p-6">
+          <div className="space-y-4 sm:space-y-6">
+            {messages.map((message: MessageWithOptimistic) => (
+              <TypewriterMessage key={message.id} message={message} />
+            ))}
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="flex items-start space-x-3">
+                  <Avatar className="w-8 h-8 sm:w-9 sm:h-9">
+                    <AvatarFallback className="bg-blue-900 text-white text-sm font-bold">PP</AvatarFallback>
+                  </Avatar>
+                  <Card className="p-3 sm:p-4 bg-gray-50 border-gray-200 shadow-sm">
+                    <div className="flex space-x-1">
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    </div>
+                  </Card>
+                </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
         </div>
       </ScrollArea>
 
-      {/* Quick Responses */}
+      {/* Quick Responses with enhanced mobile design */}
       {quickResponses.length > 0 && (
-        <div className="p-4 border-t border-gray-200 bg-white">
-          <div className="flex flex-wrap gap-2">
-            {quickResponses.map((response: string) => (
-              <Button
-                key={response}
-                variant="outline"
-                size="sm"
-                className="border-blue-900 text-blue-900 hover:bg-blue-900 hover:text-white"
-                onClick={() => handleQuickResponse(response)}
-                disabled={isLoading}
-              >
-                {response}
-              </Button>
-            ))}
+        <div className="border-t border-gray-200 bg-white">
+          <div className="max-w-4xl mx-auto p-4 sm:p-5">
+            <div className="flex flex-wrap gap-2 sm:gap-3">
+              {quickResponses.map((response: string) => (
+                <Button
+                  key={response}
+                  variant="outline"
+                  size="sm"
+                  className="min-h-[44px] px-4 py-2 border-blue-900 text-blue-900 hover:bg-blue-900 hover:text-white transition-all duration-200 active:scale-95 font-medium text-sm sm:text-base"
+                  onClick={() => handleQuickResponse(response)}
+                  disabled={isLoading}
+                >
+                  {response}
+                </Button>
+              ))}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Input */}
-      <div className="p-4 border-t border-gray-200 bg-white">
-        <form onSubmit={handleSendMessage} className="flex space-x-2">
-          <Input
-            value={inputValue}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
-            placeholder="Type your message..."
-            className="flex-1 border-gray-300 focus:border-blue-900 focus:ring-blue-900"
-            disabled={isLoading}
-          />
-          <Button
-            type="submit"
-            className="bg-blue-900 hover:bg-blue-800 text-white px-6"
-            disabled={isLoading || !inputValue.trim()}
-          >
-            {isLoading ? (
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-            ) : (
-              '→'
-            )}
-          </Button>
-        </form>
+      {/* Enhanced Input Area with safe area support */}
+      <div className="border-t border-gray-200 bg-white safe-area-bottom">
+        <div className="max-w-4xl mx-auto p-4 sm:p-5">
+          <form onSubmit={handleSendMessage} className="flex space-x-3">
+            <Input
+              value={inputValue}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInputValue(e.target.value)}
+              placeholder="Type your message..."
+              className="flex-1 min-h-[44px] text-base border-gray-300 focus:border-blue-900 focus:ring-blue-900 chat-input mobile-input transition-all duration-200"
+              disabled={isLoading}
+            />
+            <Button
+              type="submit"
+              className="min-h-[44px] min-w-[44px] bg-blue-900 hover:bg-blue-800 active:bg-blue-950 text-white px-4 sm:px-6 transition-all duration-200 active:scale-95 shadow-sm"
+              disabled={isLoading || !inputValue.trim()}
+            >
+              {isLoading ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+              ) : (
+                <span className="text-lg">→</span>
+              )}
+            </Button>
+          </form>
+        </div>
       </div>
     </div>
   );
