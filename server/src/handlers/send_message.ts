@@ -1,16 +1,35 @@
 
+import { db } from '../db';
+import { messagesTable, conversationsTable } from '../db/schema';
 import { type SendMessageInput, type Message } from '../schema';
+import { eq } from 'drizzle-orm';
 
 export const sendMessage = async (input: SendMessageInput): Promise<Message> => {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to save a user message to the database and trigger bot response.
-    // It should insert the user message and potentially generate an AI bot response.
-    return Promise.resolve({
-        id: 0, // Placeholder ID
+  try {
+    // Verify the conversation exists
+    const conversation = await db.select()
+      .from(conversationsTable)
+      .where(eq(conversationsTable.id, input.conversation_id))
+      .execute();
+
+    if (conversation.length === 0) {
+      throw new Error(`Conversation with id ${input.conversation_id} not found`);
+    }
+
+    // Insert the message
+    const result = await db.insert(messagesTable)
+      .values({
         conversation_id: input.conversation_id,
         message_type: input.message_type || 'user',
         content: input.content,
-        metadata: null,
-        created_at: new Date()
-    } as Message);
+        metadata: null
+      })
+      .returning()
+      .execute();
+
+    return result[0];
+  } catch (error) {
+    console.error('Send message failed:', error);
+    throw error;
+  }
 };

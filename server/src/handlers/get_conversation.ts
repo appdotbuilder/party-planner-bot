@@ -1,26 +1,27 @@
 
+import { db } from '../db';
+import { conversationsTable } from '../db/schema';
 import { type Conversation } from '../schema';
+import { eq } from 'drizzle-orm';
 
 export const getConversation = async (conversationId: number): Promise<Conversation | null> => {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to retrieve a conversation by ID with all its details.
-    return Promise.resolve({
-        id: conversationId,
-        user_id: 'placeholder',
-        party_type: null,
-        city: null,
-        activity_preference: null,
-        party_name: null,
-        party_dates: null,
-        guest_count: null,
-        budget: null,
-        theme: null,
-        dining_preferences: null,
-        music_preferences: null,
-        day_activities: null,
-        night_activities: null,
-        current_state: 'initial',
-        created_at: new Date(),
-        updated_at: new Date()
-    } as Conversation);
+  try {
+    const results = await db.select()
+      .from(conversationsTable)
+      .where(eq(conversationsTable.id, conversationId))
+      .execute();
+
+    if (results.length === 0) {
+      return null;
+    }
+
+    const conversation = results[0];
+    return {
+      ...conversation,
+      budget: conversation.budget ? parseFloat(conversation.budget) : null
+    };
+  } catch (error) {
+    console.error('Failed to get conversation:', error);
+    throw error;
+  }
 };
